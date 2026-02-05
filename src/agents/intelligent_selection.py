@@ -19,7 +19,16 @@ from typing import Dict, Optional, List, Tuple
 from dataclasses import dataclass
 
 from agents.intelligent_base import IntelligentAgent, ConfidenceLevel, AgentThought
-from agents.schemas import AgentRole
+from agents.schemas import (
+    AgentRole,
+    ReservingOutput,
+    ReservingConfigFile,
+    MethodResult,
+    StochasticResult,
+    DiagnosticsResult,
+    TriangleMetadata,
+    AnalysisType,
+)
 
 from model_selection.factor_estimators import get_all_estimators
 from model_selection.model_selector import ModelSelector
@@ -28,6 +37,10 @@ from tail_fitting.tail_estimator import TailEstimator
 from chain_ladder import ChainLadder
 from pattern_analysis.pattern_analyzer import PatternAnalyzer
 from pattern_analysis.curve_fitting import CurveFitter
+import sys
+
+sys.path.append("src")
+from enhanced_workflow import EnhancedReservingWorkflow
 
 
 TAIL_CV_THRESHOLD = 0.15
@@ -509,6 +522,177 @@ Reasoning:
 
 Confidence: {thought["confidence"]}
 """
+
+    def execute_full_analysis(
+        self,
+        triangle: pd.DataFrame,
+        config: ReservingConfigFile,
+        premium: Optional[pd.Series] = None,
+        verbose: bool = True,
+    ) -> ReservingOutput:
+        """
+        Execute complete actuarial analysis and return ReservingOutput.
+
+        This replaces the need for ReservingExecutionAgent.
+        Uses EnhancedReservingWorkflow with selected factors.
+        """
+        from datetime import datetime
+
+        if verbose:
+            print(f"[{self.role}] 🚀 Starting full analysis execution...")
+
+        # First, do the selection
+        selection_result = self.analyze_and_select(triangle, verbose=verbose)
+        selected_factors = selection_result.adjusted_factors
+
+        # Use EnhancedReservingWorkflow for full execution
+        workflow = EnhancedReservingWorkflow(
+            triangle=triangle, earned_premium=premium, verbose=verbose
+        )
+
+        # Apply selected factors
+        workflow.selected_factors = selected_factors
+
+        # Run Chain Ladder
+        workflow.run_chain_ladder()
+
+        # Run stochastic methods if not QUICK
+        if config.analysis_type != AnalysisType.QUICK:
+            workflow.run_mack_model()
+
+        # Run Bootstrap if requested
+        if config.run_bootstrap:
+            workflow.run_bootstrap(n_simulations=config.n_bootstrap_simulations)
+
+        # Run alternative methods for FULL analysis
+        if config.analysis_type == AnalysisType.FULL and premium is not None:
+            workflow.run_alternative_methods()
+
+        # Run diagnostics if requested
+        if config.run_diagnostics:
+            workflow.run_diagnostics()
+
+        # Run stress testing for FULL analysis
+        if config.run_stress_testing and config.analysis_type == AnalysisType.FULL:
+            workflow.run_stress_testing()
+
+        # Package results into ReservingOutput
+        output = self._package_results(workflow, config, triangle, verbose)
+
+        if verbose:
+            print(f"[{self.role}] ✅ Full analysis complete!")
+
+        return output
+
+    def _package_results(
+        self,
+        workflow: EnhancedReservingWorkflow,
+        config: ReservingConfigFile,
+        triangle: pd.DataFrame,
+        verbose: bool = True,
+    ) -> ReservingOutput:
+        """Package workflow results into ReservingOutput structure."""
+
+        # Triangle metadata
+        triangle_meta = TriangleMetadata(
+            n_accident_years=len(triangle),
+            n_development_periods=len(triangle.columns),
+            first_accident_year=int(triangle.index[0]),
+            last_accident_year=int(triangle.index[-1]),
+            currency="USD",
+            units="millions",
+        )
+
+        results = workflow.results
+
+        # Chain Ladder
+        chain_ladder_result = MethodResult(
+            method_name="Chain Ladder",
+            total_reserve=results["chain_ladder"]["total_reserve"],
+            ultimate_loss=results["chain_ladder"]["total_ultimate"],
+            model_params={
+                "factors": workflow.selected_factors.to_dict()
+                if hasattr(workflow.selected_factors, "to_dict")
+                else {}
+            },
+        )
+
+        # Initialize output
+        output = ReservingOutput(
+            config_used=config,
+            triangle_info=triangle_meta,
+            chain_ladder=chain_ladder_result,
+        )
+
+        # Mack Model
+        if "mack" in results:
+            mack_data = results["mack"]
+            total_reserve = mack_data["total_reserve"]
+            std_error = mack_data.get("total_std_error", 0)
+            cv = std_error / total_reserve if total_reserve > 0 else 0
+
+            percentiles = mack_data.get("percentiles", {})
+            if not percentiles and std_error > 0:
+                percentiles = {
+                    "p75": total_reserve + 0.674 * std_error,
+                    "p90": total_reserve + 1.282 * std_error,
+                    "p95": total_reserve + 1.645 * std_error,
+                    "p99": total_reserve + 2.326 * std_error,
+                }
+
+            output.mack = StochasticResult(
+                method_name="Mack",
+                total_reserve=total_reserve,
+                ultimate_loss=mack_data["total_ultimate"],
+                standard_error=std_error,
+                cv=cv,
+                percentiles=percentiles,
+            )
+
+        # Bootstrap
+        if "bootstrap" in results:
+            boot_data = results["bootstrap"]
+            total_reserve = boot_data["total_reserve"]
+            std_error = boot_data.get("std_error", 0)
+            cv = std_error / total_reserve if total_reserve > 0 else 0
+
+            output.bootstrap = StochasticResult(
+                method_name="Bootstrap",
+                total_reserve=total_reserve,
+                ultimate_loss=boot_data["total_ultimate"],
+                standard_error=std_error,
+                cv=cv,
+                percentiles=boot_data.get("percentiles", {}),
+            )
+
+        # Cape Cod
+        if "cape_cod" in results:
+            cc_data = results["cape_cod"]
+            output.cape_cod = MethodResult(
+                method_name="Cape Cod",
+                total_reserve=cc_data["total_reserve"],
+                ultimate_loss=cc_data["total_ultimate"],
+                model_params=cc_data.get("params", {}),
+            )
+
+        # Diagnostics
+        if "diagnostics" in results:
+            diag_data = results["diagnostics"]
+            adequacy_score = diag_data.get("adequacy_score", 100)
+
+            rating = "GOOD"
+            if adequacy_score < 60:
+                rating = "POOR"
+            elif adequacy_score < 80:
+                rating = "FAIR"
+
+            output.diagnostics = DiagnosticsResult(
+                adequacy_score=adequacy_score,
+                rating=rating,
+                issues=diag_data.get("issues", []),
+            )
+
+        return output
 
 
 # ======================================================
