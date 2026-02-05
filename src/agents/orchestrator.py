@@ -334,7 +334,9 @@ Classify this query."""
 
         else:  # Q_AND_A
             # Standard Q&A with memory context
-            for update in self.ask_question(message, current_result):
+            # Ensure context is a dict, not None
+            safe_context = current_result if current_result is not None else {}
+            for update in self.ask_question(message, safe_context):
                 yield update
 
     def execute_code_query(self, query: str, context: dict):
