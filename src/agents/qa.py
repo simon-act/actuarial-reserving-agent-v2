@@ -3,6 +3,7 @@ from agents.llm_utils import LLMClient
 from typing import Tuple, List, Dict, Optional
 import json
 
+
 class QASpecialistAgent:
     """
     ANALYTICAL Q&A AGENT (Enhanced with Conversation Memory)
@@ -21,7 +22,7 @@ class QASpecialistAgent:
         self,
         query: str,
         context: dict,
-        conversation_history: Optional[List[Dict]] = None
+        conversation_history: Optional[List[Dict]] = None,
     ) -> Tuple[str, AgentLog]:
         """
         Answer a query using the provided context (results + validation).
@@ -43,15 +44,19 @@ class QASpecialistAgent:
                 content = msg.get("content", "")[:200]  # Truncate
                 history_lines.append(f"{role}: {content}")
             history_context = "\n".join(history_lines)
-        
+
         # Try LLM first - using the enhanced "Analytical" persona
         llm_error = None
         if self.llm.is_available():
             try:
                 # Prepare Context
-                results_json = results.model_dump_json(exclude={'timestamp'})
+                if results is None:
+                    raise ValueError(
+                        "No analysis results available. Please run an analysis first."
+                    )
+                results_json = results.model_dump_json(exclude={"timestamp"})
                 validation_json = validation.model_dump_json() if validation else "{}"
-                
+
                 # Include conversation history in prompt
                 history_section = ""
                 if history_context:
@@ -84,12 +89,18 @@ class QASpecialistAgent:
                     f"RESULTS: {results_json}\n"
                     f"VALIDATION: {validation_json}\n"
                 )
-                
+
                 response = self.llm.get_completion(system_prompt, query)
 
                 # Only treat as error if it starts with our specific error prefix
-                if not response.startswith("Error:") and not response.startswith("Error calling"):
-                    return response, AgentLog(agent=self.role, action="Q&A (LLM)", details="Answered via OpenAI")
+                if not response.startswith("Error:") and not response.startswith(
+                    "Error calling"
+                ):
+                    return response, AgentLog(
+                        agent=self.role,
+                        action="Q&A (LLM)",
+                        details="Answered via OpenAI",
+                    )
                 else:
                     llm_error = response
             except Exception as e:
@@ -99,26 +110,41 @@ class QASpecialistAgent:
         # Fallback to Rule-Based Logic
         fallback_preamble = ""
         if llm_error:
-             fallback_preamble = f"⚠️ *Note: LLM error ({llm_error}). Using basic keyword rules instead.*\n\n"
+            fallback_preamble = f"⚠️ *Note: LLM error ({llm_error}). Using basic keyword rules instead.*\n\n"
         elif not self.llm.is_available():
-             error_msg = self.llm.last_error if hasattr(self.llm, 'last_error') else "API key not configured"
-             fallback_preamble = f"⚠️ *Note: OpenAI API not available ({error_msg}). Using basic keyword rules.*\n\n"
+            error_msg = (
+                self.llm.last_error
+                if hasattr(self.llm, "last_error")
+                else "API key not configured"
+            )
+            fallback_preamble = f"⚠️ *Note: OpenAI API not available ({error_msg}). Using basic keyword rules.*\n\n"
 
         query_lower = query.lower()
         response = ""
 
         # 1. Validation / Warnings
-        if "warning" in query_lower or "valid" in query_lower or "issue" in query_lower or "problem" in query_lower:
+        if (
+            "warning" in query_lower
+            or "valid" in query_lower
+            or "issue" in query_lower
+            or "problem" in query_lower
+        ):
             if validation.issues:
-                response = f"The Validation Agent found {len(validation.issues)} issues:\n"
+                response = (
+                    f"The Validation Agent found {len(validation.issues)} issues:\n"
+                )
                 for issue in validation.issues:
                     response += f"- **{issue.severity}**: {issue.message}\n"
                 response += f"\nOverall Confidence Score: {validation.overall_confidence_score}/100"
             else:
-                response = "✅ No validation issues were found. The results passed all checks."
+                response = (
+                    "✅ No validation issues were found. The results passed all checks."
+                )
 
         # 2. IBNR / Reserve questions
-        elif "ibnr" in query_lower or "reserve" in query_lower or "riserv" in query_lower:
+        elif (
+            "ibnr" in query_lower or "reserve" in query_lower or "riserv" in query_lower
+        ):
             response = f"**Total IBNR Reserve (Chain Ladder)**: ${results.chain_ladder.total_reserve:,.0f}\n"
             if results.mack:
                 response += f"**Mack Model**: ${results.mack.total_reserve:,.0f} (SE: ${results.mack.standard_error:,.0f}, CV: {results.mack.cv:.1%})\n"
@@ -128,13 +154,24 @@ class QASpecialistAgent:
                 response += f"**Cape Cod**: ${results.cape_cod.total_reserve:,.0f}"
 
         # 3. Ultimate losses
-        elif "ultimate" in query_lower or "final" in query_lower or "totale" in query_lower:
+        elif (
+            "ultimate" in query_lower
+            or "final" in query_lower
+            or "totale" in query_lower
+        ):
             response = f"**Ultimate Loss (Chain Ladder)**: ${results.chain_ladder.ultimate_loss:,.0f}\n"
             if results.cape_cod:
-                response += f"**Ultimate (Cape Cod)**: ${results.cape_cod.ultimate_loss:,.0f}"
+                response += (
+                    f"**Ultimate (Cape Cod)**: ${results.cape_cod.ultimate_loss:,.0f}"
+                )
 
         # 4. Mack specific
-        elif "mack" in query_lower or "stochastic" in query_lower or "uncertainty" in query_lower or "incertezza" in query_lower:
+        elif (
+            "mack" in query_lower
+            or "stochastic" in query_lower
+            or "uncertainty" in query_lower
+            or "incertezza" in query_lower
+        ):
             if results.mack:
                 response = (
                     f"**Mack Model Results**:\n"
@@ -143,10 +180,17 @@ class QASpecialistAgent:
                     f"- Coefficient of Variation: {results.mack.cv:.1%}"
                 )
             else:
-                response = "The Mack model was not included in this analysis configuration."
+                response = (
+                    "The Mack model was not included in this analysis configuration."
+                )
 
         # 5. Bootstrap / Simulation
-        elif "bootstrap" in query_lower or "simulat" in query_lower or "distribut" in query_lower or "percentil" in query_lower:
+        elif (
+            "bootstrap" in query_lower
+            or "simulat" in query_lower
+            or "distribut" in query_lower
+            or "percentil" in query_lower
+        ):
             if results.bootstrap:
                 response = (
                     f"**Bootstrap Results**:\n"
@@ -160,7 +204,12 @@ class QASpecialistAgent:
                 response = "Bootstrap simulation was not included in this analysis."
 
         # 6. Chain Ladder specific
-        elif "chain" in query_lower or "ladder" in query_lower or "cl " in query_lower or "development" in query_lower:
+        elif (
+            "chain" in query_lower
+            or "ladder" in query_lower
+            or "cl " in query_lower
+            or "development" in query_lower
+        ):
             response = (
                 f"**Chain Ladder Results**:\n"
                 f"- Total Reserve: ${results.chain_ladder.total_reserve:,.0f}\n"
@@ -180,7 +229,12 @@ class QASpecialistAgent:
                 response = "Cape Cod was not included in this analysis."
 
         # 9. Diagnostics / Quality
-        elif "diagnos" in query_lower or "quality" in query_lower or "adequacy" in query_lower or "qualità" in query_lower:
+        elif (
+            "diagnos" in query_lower
+            or "quality" in query_lower
+            or "adequacy" in query_lower
+            or "qualità" in query_lower
+        ):
             if results.diagnostics:
                 response = (
                     f"**Model Diagnostics**:\n"
@@ -188,12 +242,19 @@ class QASpecialistAgent:
                     f"- Rating: {results.diagnostics.rating}\n"
                 )
                 if results.diagnostics.issues:
-                    response += f"- Issues Found: {', '.join(results.diagnostics.issues)}"
+                    response += (
+                        f"- Issues Found: {', '.join(results.diagnostics.issues)}"
+                    )
             else:
                 response = "Diagnostics were not run for this analysis."
 
         # 10. Methodology / Config
-        elif "method" in query_lower or "config" in query_lower or "metod" in query_lower or "approach" in query_lower:
+        elif (
+            "method" in query_lower
+            or "config" in query_lower
+            or "metod" in query_lower
+            or "approach" in query_lower
+        ):
             response = (
                 f"**Analysis Configuration**:\n"
                 f"- Type: {results.config_used.analysis_type.value}\n"
@@ -203,7 +264,12 @@ class QASpecialistAgent:
             )
 
         # 11. Summary / Overview
-        elif "summary" in query_lower or "overview" in query_lower or "riepilogo" in query_lower or "all" in query_lower:
+        elif (
+            "summary" in query_lower
+            or "overview" in query_lower
+            or "riepilogo" in query_lower
+            or "all" in query_lower
+        ):
             response = f"**Analysis Summary**:\n\n"
             response += f"📊 **Chain Ladder**: Reserve ${results.chain_ladder.total_reserve:,.0f} | Ultimate ${results.chain_ladder.ultimate_loss:,.0f}\n"
             if results.mack:
@@ -211,14 +277,23 @@ class QASpecialistAgent:
             if results.bootstrap:
                 response += f"🎲 **Bootstrap**: Reserve ${results.bootstrap.total_reserve:,.0f} (P95: ${results.bootstrap.percentiles.get('95%', 0):,.0f})\n"
             if results.cape_cod:
-                response += f"🏖️ **Cape Cod**: Reserve ${results.cape_cod.total_reserve:,.0f}\n"
+                response += (
+                    f"🏖️ **Cape Cod**: Reserve ${results.cape_cod.total_reserve:,.0f}\n"
+                )
             if validation:
                 response += f"\n✅ **Validation Score**: {validation.overall_confidence_score}/100"
 
         # 12. Compare methods
-        elif "compar" in query_lower or "differenc" in query_lower or "vs" in query_lower or "confronto" in query_lower:
+        elif (
+            "compar" in query_lower
+            or "differenc" in query_lower
+            or "vs" in query_lower
+            or "confronto" in query_lower
+        ):
             response = "**Method Comparison**:\n\n"
-            response += f"| Method | Reserve | Ultimate |\n|--------|---------|----------|\n"
+            response += (
+                f"| Method | Reserve | Ultimate |\n|--------|---------|----------|\n"
+            )
             response += f"| Chain Ladder | ${results.chain_ladder.total_reserve:,.0f} | ${results.chain_ladder.ultimate_loss:,.0f} |\n"
             if results.mack:
                 response += f"| Mack | ${results.mack.total_reserve:,.0f} | - |\n"
@@ -248,7 +323,7 @@ class QASpecialistAgent:
         log = AgentLog(
             agent=self.role,
             action="Q&A (Fallback)",
-            details=f"Query: {query[:20]}... | Answered: Via Rules"
+            details=f"Query: {query[:20]}... | Answered: Via Rules",
         )
-        
+
         return response, log
