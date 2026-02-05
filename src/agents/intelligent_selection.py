@@ -539,7 +539,7 @@ Confidence: {thought["confidence"]}
         from datetime import datetime
 
         if verbose:
-            print(f"[{self.role}] 🚀 Starting full analysis execution...")
+            print(f"[Selection+Execution] 🚀 Starting full analysis...")
 
         # First, do the selection
         selection_result = self.analyze_and_select(triangle, verbose=verbose)

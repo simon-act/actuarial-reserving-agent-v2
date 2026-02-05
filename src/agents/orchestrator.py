@@ -529,7 +529,8 @@ Classify this query."""
                 "status": "error",
                 "message": f"Analysis failed: {e}",
             }
-            raise RuntimeError(f"Failed to execute analysis: {e}")
+            # Return early with error instead of crashing
+            return
 
         # Attach selection results
         from agents.schemas import MethodSelection
