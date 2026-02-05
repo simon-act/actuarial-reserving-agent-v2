@@ -389,15 +389,24 @@ Classify this query."""
             "status": "running",
             "message": "🧠 Intelligent agent is selecting optimal method...",
         }
+
+        # Load data first (needed for both selection and execution)
         try:
-            # Load data for selection
             triangle = pd.read_csv(inputs.triangle_path, index_col=0)
             self._triangle_cache = triangle  # Cache for CodeAgent
 
             premium = None
             if inputs.premium_path:
                 premium = pd.read_csv(inputs.premium_path, index_col=0).iloc[:, 0]
+        except Exception as e:
+            yield {
+                "step": "selection",
+                "status": "error",
+                "message": f"Failed to load data: {e}",
+            }
+            return
 
+        try:
             # Stream the thinking process
             initial_selection = None
             try:
@@ -502,24 +511,25 @@ Classify this query."""
             }
             yield {"step": "selection", "status": "done", "data": selection_result}
 
-        # 3. Execution
+        # 3. Execution (now integrated into SelectionAgent)
         yield {
             "step": "execution",
             "status": "running",
-            "message": "Actuary is running models...",
+            "message": "Running full actuarial analysis...",
         }
 
-        # Use adjusted_factors if available, otherwise use default factors
-        selected_factors = None
+        # Use the SelectionAgent to execute full analysis
         try:
-            selected_factors = final_selection.adjusted_factors
-        except NameError:
-            # final_selection not defined due to error in selection - use default
-            pass
-
-        results = self.actuary.execute(
-            inputs, config, selected_factors=selected_factors
-        )
+            results = self.selector.execute_full_analysis(
+                triangle=triangle, config=config, premium=premium, verbose=True
+            )
+        except Exception as e:
+            yield {
+                "step": "execution",
+                "status": "error",
+                "message": f"Analysis failed: {e}",
+            }
+            raise RuntimeError(f"Failed to execute analysis: {e}")
 
         # Attach selection results
         from agents.schemas import MethodSelection
