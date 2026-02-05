@@ -251,24 +251,47 @@ Clear, professional reasoning.
             "data": diagnostics,
         }
 
-        # Phase 4: Pattern Analysis
+        # Phase 4: Pattern Analysis with streaming
         yield {
             "phase": "pattern_analysis",
             "status": "running",
-            "content": "🔍 Analyzing development patterns...",
+            "content": "🔍 Analyzing development patterns (with intelligent reasoning)...",
             "data": None,
         }
 
         base_factors = self._select_base_factors(validation, factors)
-        pattern = self.pattern_analyzer.analyze_pattern(base_factors, triangle)
+
+        # Stream pattern analysis thoughts
+        pattern = None
+        for pattern_thought in self.pattern_analyzer.analyze_pattern_stream(
+            base_factors, triangle
+        ):
+            # Yield pattern analyzer thoughts to UI
+            if pattern_thought["phase"] != "complete":
+                yield {
+                    "phase": f"pattern_{pattern_thought['phase']}",
+                    "status": pattern_thought["status"],
+                    "content": pattern_thought["content"],
+                    "thought_data": pattern_thought.get("data"),
+                    "agent": "PatternAnalyzer",
+                }
+            else:
+                # Final result
+                pattern = pattern_thought["data"]["result"]
+
+        if pattern is None:
+            # Fallback to non-streaming
+            pattern = self.pattern_analyzer.analyze_pattern(base_factors, triangle)
+
         yield {
             "phase": "pattern_analysis",
             "status": "complete",
-            "content": f"✓ Smoothing {'applied' if pattern.smoothing_applied else 'not needed'}",
+            "content": f"✓ Pattern analysis complete - {'smoothing applied' if pattern.smoothing_applied else 'no smoothing needed'}",
             "data": {
                 "smoothing_applied": pattern.smoothing_applied,
                 "smoothing_method": pattern.smoothing_method,
                 "smoothing_weight": pattern.smoothing_weight,
+                "thought_process": pattern.thought_process,
             },
         }
 

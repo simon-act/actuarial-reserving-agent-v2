@@ -20,11 +20,16 @@ from dataclasses import dataclass
 
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.intelligent_base import (
-    IntelligentAgent, Analysis, Decision, Critique,
-    AgentThought, ConfidenceLevel
+    IntelligentAgent,
+    Analysis,
+    Decision,
+    Critique,
+    AgentThought,
+    ConfidenceLevel,
 )
 from agents.schemas import AgentRole
 from pattern_analysis.curve_fitting import CurveFitter, FitResult
@@ -33,6 +38,7 @@ from pattern_analysis.curve_fitting import CurveFitter, FitResult
 @dataclass
 class PatternAnalysisResult:
     """Complete result of pattern analysis."""
+
     original_factors: pd.Series
     recommended_factors: pd.Series
     smoothing_applied: bool
@@ -57,10 +63,7 @@ class PatternAnalyzer(IntelligentAgent):
     """
 
     def __init__(self):
-        super().__init__(
-            role=AgentRole.METHODOLOGY,
-            name="Pattern_Analyzer"
-        )
+        super().__init__(role=AgentRole.METHODOLOGY, name="Pattern_Analyzer")
 
     def _get_system_prompt(self) -> str:
         return """You are an expert actuarial analyst specializing in loss reserving and development pattern analysis.
@@ -82,14 +85,16 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
 
     def _format_data_for_analysis(self, data: Dict) -> str:
         """Format pattern data for LLM analysis."""
-        factors = data.get('factors', pd.Series())
-        triangle_info = data.get('triangle_info', {})
-        fit_results = data.get('fit_results', {})
+        factors = data.get("factors", pd.Series())
+        triangle_info = data.get("triangle_info", {})
+        fit_results = data.get("fit_results", {})
 
         # Format factors with analysis
         factors_text = "DEVELOPMENT FACTORS:\n"
         factors_text += "-" * 60 + "\n"
-        factors_text += f"{'Period':<10} {'Factor':<12} {'Δ from prev':<15} {'Direction':<12}\n"
+        factors_text += (
+            f"{'Period':<10} {'Factor':<12} {'Δ from prev':<15} {'Direction':<12}\n"
+        )
         factors_text += "-" * 60 + "\n"
 
         prev_factor = None
@@ -106,7 +111,9 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
                 else:
                     direction = "unchanged"
 
-            factors_text += f"{period:<10} {factor:<12.4f} {delta:<15} {direction:<12}\n"
+            factors_text += (
+                f"{period:<10} {factor:<12.4f} {delta:<15} {direction:<12}\n"
+            )
             prev_factor = factor
 
         factors_text += "-" * 60 + "\n"
@@ -116,13 +123,15 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
         factors_text += f"\nSTATISTICS:\n"
         factors_text += f"  Mean: {np.mean(factors_arr):.4f}\n"
         factors_text += f"  Std Dev: {np.std(factors_arr):.4f}\n"
-        factors_text += f"  CV (Coef of Variation): {np.std(factors_arr)/np.mean(factors_arr):.2%}\n"
+        factors_text += f"  CV (Coef of Variation): {np.std(factors_arr) / np.mean(factors_arr):.2%}\n"
         factors_text += f"  Min: {np.min(factors_arr):.4f}\n"
         factors_text += f"  Max: {np.max(factors_arr):.4f}\n"
         factors_text += f"  Range: {np.max(factors_arr) - np.min(factors_arr):.4f}\n"
 
         # Count non-monotonic points
-        non_monotonic = sum(1 for i in range(1, len(factors_arr)) if factors_arr[i] > factors_arr[i-1])
+        non_monotonic = sum(
+            1 for i in range(1, len(factors_arr)) if factors_arr[i] > factors_arr[i - 1]
+        )
         factors_text += f"  Non-monotonic points: {non_monotonic}\n"
 
         # Triangle context
@@ -138,15 +147,14 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
             factors_text += f"{'Method':<20} {'R²':<10} {'RMSE':<10}\n"
             factors_text += "-" * 60 + "\n"
             for name, result in fit_results.items():
-                factors_text += f"{name:<20} {result.r_squared:<10.4f} {result.rmse:<10.4f}\n"
+                factors_text += (
+                    f"{name:<20} {result.r_squared:<10.4f} {result.rmse:<10.4f}\n"
+                )
 
         return factors_text
 
     def analyze_pattern(
-        self,
-        factors: pd.Series,
-        triangle: pd.DataFrame = None,
-        context: str = ""
+        self, factors: pd.Series, triangle: pd.DataFrame = None, context: str = ""
     ) -> PatternAnalysisResult:
         """
         Analyze a development factor pattern and decide on smoothing.
@@ -170,31 +178,33 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
         triangle_info = {}
         if triangle is not None:
             triangle_info = {
-                'n_accident_years': len(triangle),
-                'n_development_periods': len(triangle.columns),
-                'first_year': int(triangle.index[0]),
-                'last_year': int(triangle.index[-1]),
-                'total_triangle_value': f"{triangle.sum().sum():,.0f}",
+                "n_accident_years": len(triangle),
+                "n_development_periods": len(triangle.columns),
+                "first_year": int(triangle.index[0]),
+                "last_year": int(triangle.index[-1]),
+                "total_triangle_value": f"{triangle.sum().sum():,.0f}",
             }
 
             # Calculate volatility
             incremental = triangle.diff(axis=1)
             volatility = incremental.std().mean() / incremental.mean().mean()
-            triangle_info['overall_volatility'] = f"{abs(volatility):.2%}" if pd.notna(volatility) else "N/A"
+            triangle_info["overall_volatility"] = (
+                f"{abs(volatility):.2%}" if pd.notna(volatility) else "N/A"
+            )
 
         # Prepare data for analysis
         data = {
-            'factors': factors,
-            'triangle_info': triangle_info,
-            'fit_results': fit_results
+            "factors": factors,
+            "triangle_info": triangle_info,
+            "fit_results": fit_results,
         }
 
         # Build options for decision
         options = ["no_smoothing"]
         for method_name in fit_results.keys():
             options.append(f"smooth_{method_name}_100")  # Full smoothing
-            options.append(f"smooth_{method_name}_70")   # 70% smooth, 30% original
-            options.append(f"smooth_{method_name}_50")   # 50/50 blend
+            options.append(f"smooth_{method_name}_70")  # 70% smooth, 30% original
+            options.append(f"smooth_{method_name}_50")  # 50/50 blend
 
         # Run intelligent thinking process
         thought = self.think(
@@ -202,7 +212,7 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
             options=options,
             task="Pattern Analysis and Smoothing Decision",
             focus="anomalies, non-monotonicity, and whether smoothing is appropriate",
-            context=context
+            context=context,
         )
 
         # Parse decision
@@ -235,7 +245,9 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
 
         # Log summary
         if smoothing_applied:
-            self._log(f"✓ Recommending smoothing: {smoothing_method} at {smoothing_weight:.0%}")
+            self._log(
+                f"✓ Recommending smoothing: {smoothing_method} at {smoothing_weight:.0%}"
+            )
         else:
             self._log("✓ Recommending no smoothing - pattern is acceptable")
 
@@ -247,8 +259,179 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
             smoothing_weight=smoothing_weight,
             thought_process=thought,
             fit_comparison=fit_comparison,
-            all_fits=fit_results
+            all_fits=fit_results,
         )
+
+    def analyze_pattern_stream(
+        self, factors: pd.Series, triangle: pd.DataFrame = None, context: str = ""
+    ):
+        """
+        Streaming version of analyze_pattern - yields thoughts in real-time.
+
+        Yields:
+            Dict with 'phase', 'status', 'content', 'data'
+        """
+        self._log("🔍 Starting intelligent pattern analysis (streaming)...")
+
+        # Phase 1: Data Preparation
+        yield {
+            "phase": "data_preparation",
+            "status": "running",
+            "content": "📊 Preparing pattern data and curve fitting...",
+            "data": None,
+        }
+
+        # Prepare curve fitting tools
+        fitter = CurveFitter(factors)
+        fit_results = fitter.fit_all()
+        fit_comparison = fitter.get_comparison_table(fit_results)
+
+        # Build triangle context
+        triangle_info = {}
+        if triangle is not None:
+            triangle_info = {
+                "n_accident_years": len(triangle),
+                "n_development_periods": len(triangle.columns),
+                "first_year": int(triangle.index[0]),
+                "last_year": int(triangle.index[-1]),
+                "total_triangle_value": f"{triangle.sum().sum():,.0f}",
+            }
+
+            # Calculate volatility
+            incremental = triangle.diff(axis=1)
+            volatility = incremental.std().mean() / incremental.mean().mean()
+            triangle_info["overall_volatility"] = (
+                f"{abs(volatility):.2%}" if pd.notna(volatility) else "N/A"
+            )
+
+        yield {
+            "phase": "data_preparation",
+            "status": "complete",
+            "content": f"✓ Curve fitting complete - {len(fit_results)} methods fitted",
+            "data": {
+                "fit_methods": list(fit_results.keys()),
+                "best_r2": max([r.r_squared for r in fit_results.values()])
+                if fit_results
+                else 0,
+            },
+        }
+
+        # Prepare data for analysis
+        data = {
+            "factors": factors,
+            "triangle_info": triangle_info,
+            "fit_results": fit_results,
+        }
+
+        # Build options for decision
+        options = ["no_smoothing"]
+        for method_name in fit_results.keys():
+            options.append(f"smooth_{method_name}_100")
+            options.append(f"smooth_{method_name}_70")
+            options.append(f"smooth_{method_name}_50")
+
+        # Phase 2-4: Stream the thinking process
+        thought = None
+        for thought_update in self.think_stream(
+            data=data,
+            options=options,
+            task="Pattern Analysis and Smoothing Decision",
+            focus="anomalies, non-monotonicity, and whether smoothing is appropriate",
+            context=context,
+        ):
+            # Map phase names to pattern-specific names
+            phase_mapping = {
+                "analysis": "pattern_analysis",
+                "decision": "smoothing_decision",
+                "critique": "decision_critique",
+            }
+
+            mapped_phase = phase_mapping.get(
+                thought_update["phase"], thought_update["phase"]
+            )
+
+            yield {
+                "phase": f"pattern_{mapped_phase}",
+                "status": thought_update["status"],
+                "content": thought_update["content"],
+                "data": thought_update.get("data"),
+            }
+
+            # Keep the final thought
+            if (
+                thought_update["phase"] == "critique"
+                and thought_update["status"] == "complete"
+            ):
+                # Reconstruct thought from data
+                from agents.intelligent_base import (
+                    AgentThought,
+                    Analysis,
+                    Decision,
+                    Critique,
+                )
+                import datetime
+
+                # Get the actual thought from history
+                if self.history:
+                    thought = self.history[-1]
+
+        # Phase 5: Parse and Apply Decision
+        yield {
+            "phase": "apply_decision",
+            "status": "running",
+            "content": "🎯 Applying smoothing decision...",
+            "data": None,
+        }
+
+        smoothing_applied = False
+        smoothing_method = None
+        smoothing_weight = None
+        recommended_factors = factors.copy()
+
+        if thought and thought.decision and thought.decision.choice != "no_smoothing":
+            choice = thought.decision.choice
+
+            if choice.startswith("smooth_"):
+                parts = choice.split("_")
+                weight_str = parts[-1]
+                method_name = "_".join(parts[1:-1])
+
+                smoothing_weight = int(weight_str) / 100.0
+                smoothing_method = method_name
+                smoothing_applied = True
+
+                if method_name in fit_results:
+                    fitted = fit_results[method_name].fitted_factors
+                    recommended_factors = fitter.blend_with_original(
+                        fitted, weight=smoothing_weight
+                    )
+                    recommended_factors = recommended_factors.reindex(factors.index)
+
+        # Log summary
+        if smoothing_applied:
+            summary_msg = (
+                f"✓ Applied {smoothing_method} smoothing at {smoothing_weight:.0%}"
+            )
+        else:
+            summary_msg = "✓ No smoothing applied - pattern acceptable"
+
+        result = PatternAnalysisResult(
+            original_factors=factors,
+            recommended_factors=recommended_factors,
+            smoothing_applied=smoothing_applied,
+            smoothing_method=smoothing_method,
+            smoothing_weight=smoothing_weight,
+            thought_process=thought,
+            fit_comparison=fit_comparison,
+            all_fits=fit_results,
+        )
+
+        yield {
+            "phase": "complete",
+            "status": "complete",
+            "content": summary_msg,
+            "data": {"result": result},
+        }
 
     def explain_decision(self, result: PatternAnalysisResult) -> str:
         """
@@ -280,7 +463,9 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
             else:
                 explanation.append("\n✅ No significant anomalies detected")
 
-            explanation.append(f"\n🎯 Analysis Confidence: {thought.analysis.confidence.value}")
+            explanation.append(
+                f"\n🎯 Analysis Confidence: {thought.analysis.confidence.value}"
+            )
 
         # Decision
         if thought.decision:
@@ -294,7 +479,9 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
                 for risk in thought.decision.risks[:3]:
                     explanation.append(f"    • {risk}")
 
-            explanation.append(f"\n  Decision Confidence: {thought.decision.confidence.value}")
+            explanation.append(
+                f"\n  Decision Confidence: {thought.decision.confidence.value}"
+            )
 
         # Critique
         if thought.critique:
@@ -306,8 +493,12 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
                 for weak in thought.critique.weaknesses[:2]:
                     explanation.append(f"    • {weak}")
 
-            explanation.append(f"\n  Final Confidence: {thought.critique.revised_confidence.value}")
-            explanation.append(f"\n  Final Recommendation: {thought.critique.final_recommendation[:300]}...")
+            explanation.append(
+                f"\n  Final Confidence: {thought.critique.revised_confidence.value}"
+            )
+            explanation.append(
+                f"\n  Final Recommendation: {thought.critique.final_recommendation[:300]}..."
+            )
 
         # Result summary
         explanation.append("\n" + "=" * 60)
@@ -333,13 +524,15 @@ You are thoughtful, evidence-based, and transparent about uncertainty."""
         Returns:
             DataFrame with comparison
         """
-        df = pd.DataFrame({
-            'Original': result.original_factors,
-            'Recommended': result.recommended_factors,
-        })
+        df = pd.DataFrame(
+            {
+                "Original": result.original_factors,
+                "Recommended": result.recommended_factors,
+            }
+        )
 
-        df['Change'] = df['Recommended'] - df['Original']
-        df['Change_Pct'] = (df['Change'] / df['Original'] * 100).round(2)
+        df["Change"] = df["Recommended"] - df["Original"]
+        df["Change_Pct"] = (df["Change"] / df["Original"] * 100).round(2)
 
         return df
 
