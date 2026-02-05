@@ -84,7 +84,7 @@ class MethodSelection(BaseModel):
     # Maturity by year
     maturity_by_year: Dict[str, float] = {}  # {year: maturity_pct}
     # Validation metrics
-    validation_metrics: Dict[str, Dict[str, float]] = {}  # {estimator: {mse, mae}}
+    validation_metrics: Dict[str, Dict[str, Optional[float]]] = {}  # {estimator: {mse, mae}}
     # Prudential adjustments to factors
     prudential_adjustments: List[Dict[str, Any]] = []
     # Adjusted factors after prudential rules
