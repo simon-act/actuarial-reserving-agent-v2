@@ -93,6 +93,12 @@ Output:
 Clear, professional reasoning.
 """
 
+    def _format_data_for_analysis(self, data: dict) -> str:
+        """Format data for LLM analysis."""
+        import json
+
+        return json.dumps(data, indent=2, default=str)
+
     # ==================================================
     # Main
     # ==================================================
