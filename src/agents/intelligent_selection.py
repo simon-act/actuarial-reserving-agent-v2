@@ -18,7 +18,7 @@ import json
 from typing import Dict, Optional, List, Tuple
 from dataclasses import dataclass
 
-from agents.intelligent_base import IntelligentAgent, ConfidenceLevel
+from agents.intelligent_base import IntelligentAgent, ConfidenceLevel, AgentThought
 from agents.schemas import AgentRole
 
 from model_selection.factor_estimators import get_all_estimators
@@ -54,6 +54,34 @@ class SelectionResult:
     explanation: str
 
     adjustments: List[Dict]
+
+    # Optional thought process from LLM
+    thought_process: Optional[AgentThought] = None
+
+    # Properties for backward compatibility with orchestrator
+    @property
+    def selected_estimator(self) -> str:
+        return self.method
+
+    @property
+    def all_estimator_results(self) -> Dict[str, float]:
+        return self.reserves
+
+    @property
+    def diagnostics_summary(self) -> Dict:
+        return self.diagnostics
+
+    @property
+    def pattern_analysis(self):
+        return self.pattern
+
+    @property
+    def adjusted_factors(self):
+        return self.factors
+
+    @property
+    def prudential_adjustments(self) -> List[Dict]:
+        return self.adjustments
 
 
 # ======================================================
@@ -150,6 +178,164 @@ Clear, professional reasoning.
             explanation=explanation,
             adjustments=adjustments,
         )
+
+    def analyze_and_select_stream(self, triangle: pd.DataFrame, verbose: bool = True):
+        """
+        Streaming version of analyze_and_select.
+        Yields thought process in real-time.
+
+        Yields:
+            Dict with 'phase', 'status', 'content', 'data'
+        """
+        if verbose:
+            print(f"[{self.role}] 🔍 Starting intelligent selection...")
+
+        # Phase 1: Data Collection
+        yield {
+            "phase": "data_collection",
+            "status": "running",
+            "content": "📊 Running all estimators...",
+            "data": None,
+        }
+
+        reserves, factors = self._run_estimators(triangle)
+        yield {
+            "phase": "data_collection",
+            "status": "complete",
+            "content": f"✓ {len(reserves)} estimators completed",
+            "data": {"estimators": list(reserves.keys()), "reserves": reserves},
+        }
+
+        # Phase 2: Validation
+        yield {
+            "phase": "validation",
+            "status": "running",
+            "content": "📈 Running cross-validation...",
+            "data": None,
+        }
+
+        validation = self._run_validation(triangle)
+        yield {
+            "phase": "validation",
+            "status": "complete",
+            "content": f"✓ Best estimator by MSE: {validation['best'].get('MSE', 'N/A')}",
+            "data": {"best": validation["best"], "table": validation["table"]},
+        }
+
+        # Phase 3: Diagnostics
+        yield {
+            "phase": "diagnostics",
+            "status": "running",
+            "content": "🔬 Running diagnostic tests...",
+            "data": None,
+        }
+
+        diagnostics = self._run_diagnostics(triangle)
+        yield {
+            "phase": "diagnostics",
+            "status": "complete",
+            "content": f"✓ Adequacy score: {diagnostics.get('adequacy_score', 'N/A')}/100",
+            "data": diagnostics,
+        }
+
+        # Phase 4: Pattern Analysis
+        yield {
+            "phase": "pattern_analysis",
+            "status": "running",
+            "content": "🔍 Analyzing development patterns...",
+            "data": None,
+        }
+
+        base_factors = self._select_base_factors(validation, factors)
+        pattern = self.pattern_analyzer.analyze_pattern(base_factors, triangle)
+        yield {
+            "phase": "pattern_analysis",
+            "status": "complete",
+            "content": f"✓ Smoothing {'applied' if pattern.smoothing_applied else 'not needed'}",
+            "data": {
+                "smoothing_applied": pattern.smoothing_applied,
+                "smoothing_method": pattern.smoothing_method,
+                "smoothing_weight": pattern.smoothing_weight,
+            },
+        }
+
+        # Phase 5: Tail Fitting
+        yield {
+            "phase": "tail_fitting",
+            "status": "running",
+            "content": "📐 Fitting tail factors...",
+            "data": None,
+        }
+
+        tail = self._fit_tail(triangle)
+        yield {
+            "phase": "tail_fitting",
+            "status": "complete",
+            "content": f"✓ Tail factor: {tail:.4f}",
+            "data": {"tail_factor": tail},
+        }
+
+        # Phase 6: LLM Decision
+        yield {
+            "phase": "llm_decision",
+            "status": "running",
+            "content": "🧠 LLM is analyzing and deciding...",
+            "data": None,
+        }
+
+        thought = self._decide(reserves, validation, diagnostics, pattern, tail)
+        yield {
+            "phase": "llm_decision",
+            "status": "complete",
+            "content": f"✓ Selected: {thought['choice']} ({thought['confidence']} confidence)",
+            "data": {
+                "choice": thought["choice"],
+                "reasoning": thought["reasoning"],
+                "confidence": thought["confidence"],
+            },
+        }
+
+        # Phase 7: Final Factors
+        if "_smoothed" in thought["choice"] and pattern.smoothing_applied:
+            final_factors = pattern.recommended_factors
+        else:
+            final_factors = base_factors
+
+        # Phase 8: Prudence
+        final_factors, adjustments = self._prudence(final_factors)
+
+        if adjustments:
+            yield {
+                "phase": "prudence",
+                "status": "complete",
+                "content": f"✓ Applied {len(adjustments)} prudential adjustments",
+                "data": {"adjustments": adjustments},
+            }
+
+        # Phase 9: Build Result
+        explanation = self._build_explanation(thought)
+
+        result = SelectionResult(
+            method=thought["choice"],
+            factors=final_factors,
+            reserves=reserves,
+            diagnostics=diagnostics,
+            validation=validation,
+            pattern=pattern,
+            tail=tail,
+            confidence=ConfidenceLevel(thought["confidence"]),
+            explanation=explanation,
+            adjustments=adjustments,
+        )
+
+        yield {
+            "phase": "complete",
+            "status": "complete",
+            "content": f"🎯 Selection complete: {thought['choice']}",
+            "data": {"result": result},
+        }
+
+        return result
 
     # ==================================================
     # Steps

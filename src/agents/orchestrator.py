@@ -396,9 +396,32 @@ Classify this query."""
             if inputs.premium_path:
                 premium = pd.read_csv(inputs.premium_path, index_col=0).iloc[:, 0]
 
-            initial_selection = self.selector.analyze_and_select(
-                triangle, premium, verbose=True
-            )
+            # Stream the thinking process
+            initial_selection = None
+            try:
+                for thought_update in self.selector.analyze_and_select_stream(
+                    triangle, verbose=True
+                ):
+                    # Yield the thinking process to UI
+                    yield {
+                        "step": f"selection_thought_{thought_update['phase']}",
+                        "status": thought_update["status"],
+                        "message": thought_update["content"],
+                        "thought_data": thought_update.get("data"),
+                    }
+                    # Keep the final result
+                    if thought_update["phase"] == "complete":
+                        initial_selection = thought_update["data"]["result"]
+            except Exception as e:
+                # Fallback to non-streaming version
+                yield {
+                    "step": "selection_thought_fallback",
+                    "status": "running",
+                    "message": f"⚠️ Streaming failed, using standard method...",
+                }
+                initial_selection = self.selector.analyze_and_select(
+                    triangle, verbose=True
+                )
 
             # One-shot peer review (no loop)
             pattern_analysis = {

@@ -133,6 +133,94 @@ class IntelligentAgent(ABC):
 
         return thought
 
+    def think_stream(
+        self,
+        data: Dict,
+        options: List[str],
+        task: str = "",
+        focus: str = None,
+        context: str = "",
+    ):
+        """
+        Streaming version of think() - yields thoughts in real-time.
+
+        Yields:
+            Dict with 'phase', 'status', 'content', 'data'
+        """
+        self._log(f"🧠 Starting thinking process: {task}")
+
+        # Phase 1: Analysis
+        yield {
+            "phase": "analysis",
+            "status": "running",
+            "content": "🔍 Analyzing data and patterns...",
+            "data": None,
+        }
+
+        analysis = self._analyze(data, focus)
+        yield {
+            "phase": "analysis",
+            "status": "complete",
+            "content": f"✓ Analysis complete ({analysis.confidence.value} confidence)",
+            "data": {
+                "observations": analysis.observations,
+                "patterns": analysis.patterns,
+                "anomalies": analysis.anomalies,
+                "reasoning": analysis.reasoning,
+            },
+        }
+
+        # Phase 2: Decision
+        yield {
+            "phase": "decision",
+            "status": "running",
+            "content": "🎯 Making decision...",
+            "data": None,
+        }
+
+        decision = self._decide(analysis, options, context)
+        yield {
+            "phase": "decision",
+            "status": "complete",
+            "content": f"✓ Decision: {decision.choice} ({decision.confidence.value} confidence)",
+            "data": {
+                "choice": decision.choice,
+                "reasoning": decision.reasoning,
+                "evidence": decision.evidence,
+                "risks": decision.risks,
+                "alternatives": decision.alternatives,
+            },
+        }
+
+        # Phase 3: Critique
+        yield {
+            "phase": "critique",
+            "status": "running",
+            "content": "🔎 Self-critiquing decision...",
+            "data": None,
+        }
+
+        critique = self._critique(decision, data)
+
+        thought = AgentThought(
+            task=task, analysis=analysis, decision=decision, critique=critique
+        )
+        self.history.append(thought)
+
+        yield {
+            "phase": "critique",
+            "status": "complete",
+            "content": f"✓ Critique complete - {critique.recommendation[:100]}..."
+            if len(critique.recommendation) > 100
+            else f"✓ Critique complete - {critique.recommendation}",
+            "data": {
+                "weaknesses": critique.weaknesses,
+                "alternatives": critique.alternatives,
+                "recommendation": critique.recommendation,
+                "confidence": critique.confidence.value,
+            },
+        }
+
     # Public API methods for backward compatibility with tests
     def analyze(self, data: Dict, focus: str = None) -> Analysis:
         """Public wrapper for _analyze."""
