@@ -1,6 +1,5 @@
 from agents.schemas import ReservingInput, AgentRole, AgentLog
 from agents.methodology import MethodologyAgent
-from agents.reserving import ReservingExecutionAgent
 from agents.validation import ValidationAgent
 from agents.reporting import ReportingAgent
 from agents.qa import QASpecialistAgent
@@ -87,7 +86,6 @@ class Orchestrator:
         # Collaborative Team
         self.methodology = MethodologyAgent()
         self.selector = IntelligentSelectionAgent()
-        self.actuary = ReservingExecutionAgent()
         self.validator = ValidationAgent()
         self.reporter = ReportingAgent()
         self.qa_specialist = QASpecialistAgent()
@@ -549,7 +547,9 @@ Classify this query."""
         )
 
         log2 = AgentLog(
-            agent=AgentRole.EXECUTION, action="Execution", details="Calculated reserves"
+            agent=AgentRole.METHODOLOGY,
+            action="Analysis Execution",
+            details="Calculated reserves",
         )
         self.logs.append(log2)
         yield {"step": "execution", "status": "done", "data": results, "log": log2}
