@@ -129,6 +129,10 @@ class IntelligentAgent(ABC):
         """
         self._log("🔍 Analyzing data...")
 
+        if not self.llm.is_available():
+            self._log("⚠️ LLM not available, using basic analysis")
+            return self._fallback_analysis(data)
+
         formatted_data = self._format_data_for_analysis(data)
 
         focus_instruction = f"\nFocus particularly on: {focus}" if focus else ""
@@ -213,6 +217,10 @@ Respond in this JSON format:
             Decision with choice, reasoning, and risks
         """
         self._log("🧠 Making decision...")
+
+        if not self.llm.is_available():
+            self._log("⚠️ LLM not available, using fallback decision")
+            return self._fallback_decision(options)
 
         prompt = f"""
 {self._get_system_prompt()}
@@ -310,6 +318,10 @@ Respond in JSON format:
             Critique with weaknesses and revised confidence
         """
         self._log("🔎 Self-critiquing decision...")
+
+        if not self.llm.is_available():
+            self._log("⚠️ LLM not available, skipping critique")
+            return self._fallback_critique(decision)
 
         data_context = ""
         if original_data:

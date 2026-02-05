@@ -718,7 +718,7 @@ RESPOND WITH:
         return "\n".join(lines)
 
 
-def consider_validation_feedback(
+    def consider_validation_feedback(
         self,
         initial_selection: 'SelectionResult',
         feedback: 'ValidationFeedback',
