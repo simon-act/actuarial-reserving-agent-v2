@@ -484,6 +484,14 @@ Classify this query."""
                     str(k): round(float(v), 4)
                     for k, v in final_selection.adjusted_factors.items()
                 },
+                "validation_feedback": {
+                    "agrees": feedback.agrees_with_selection,
+                    "concerns": feedback.concerns,
+                    "suggestions": feedback.suggestions,
+                    "alternative": feedback.alternative_recommendation,
+                    "reasoning": feedback.reasoning,
+                    "confidence": feedback.confidence.value if hasattr(feedback.confidence, 'value') else str(feedback.confidence),
+                },
             }
 
             log_sel = AgentLog(

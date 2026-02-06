@@ -83,6 +83,7 @@ if prompt := st.chat_input("Tell the research team what to analyze..."):
         # Stream Updates from Unified Router
         full_response = ""
         current_context = st.session_state.final_result
+        reasoning_capture = {}  # Capture agent thought data for reasoning tab
 
         for update in orch.route_request(prompt, current_result=current_context):
             step = update["step"]
@@ -111,8 +112,21 @@ if prompt := st.chat_input("Tell the research team what to analyze..."):
                     elif step == "validation":
                         cont.write(f"**Score:** {update['data'].overall_confidence_score}/100")
 
+            # 2b. Selection Agent Thought Process (streaming reasoning)
+            elif step.startswith("selection_thought_"):
+                phase = step.replace("selection_thought_", "")
+                cont = get_container("selection", expanded=True)
+                cont.write(update["message"])
+                # Capture completed thought data for the reasoning tab
+                if update.get("thought_data") and update["status"] == "complete":
+                    reasoning_capture[phase] = {
+                        "message": update["message"],
+                        "data": update["thought_data"]
+                    }
+
             # 3. Final Result Bundle
             elif step == "complete":
+                update["result"]["agent_reasoning"] = reasoning_capture
                 st.session_state.final_result = update["result"]
                 st.success("Analysis Updated!")
 
@@ -145,12 +159,13 @@ if prompt := st.chat_input("Tell the research team what to analyze..."):
             st.session_state.messages = []
             st.rerun()
 
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "📄 Final Report",
             "🎯 Method Selection",
             "📊 Charts",
             "🧬 Structured Data",
-            "📜 Audit Trail"
+            "📜 Audit Trail",
+            "🧠 Agent Reasoning"
         ])
 
         with tab1:
@@ -383,3 +398,223 @@ if prompt := st.chat_input("Tell the research team what to analyze..."):
             for log in res["audit_trail"]:
                 st.text(f"[{log.timestamp.strftime('%H:%M:%S')}] {log.agent.value}: {log.action}")
             # Append Q&A logs if any exist in the local orch instance
+
+        with tab6:
+            st.subheader("🧠 Agent Reasoning Process")
+            st.caption("Transparent view into how each AI agent reasoned during the analysis.")
+
+            reasoning = res.get("agent_reasoning", {})
+            sel_data = res.get("method_selection", {})
+
+            if not reasoning:
+                st.info("💡 Agent reasoning is captured during live analysis. Run a new analysis to see the full thought process here.")
+            else:
+                # ── SELECTION AGENT ─────────────────────────────
+                st.markdown("### 🎯 Selection Agent — Step-by-Step Reasoning")
+
+                # Step 1: Data Collection
+                if "data_collection" in reasoning:
+                    with st.expander("📊 Step 1 — Data Collection (All Estimators)", expanded=False):
+                        data = reasoning["data_collection"].get("data", {})
+                        if data and data.get("reserves"):
+                            for name, reserve in sorted(data["reserves"].items(), key=lambda x: x[1]):
+                                st.write(f"**{name}:** ${reserve:,.0f}")
+                        else:
+                            st.write("No estimator data captured.")
+
+                # Step 2: Cross-Validation
+                if "validation" in reasoning:
+                    with st.expander("📈 Step 2 — Cross-Validation", expanded=False):
+                        data = reasoning["validation"].get("data", {})
+                        if data and data.get("best"):
+                            for metric, best_est in data["best"].items():
+                                st.success(f"Best by **{metric}:** {best_est}")
+                        if data and data.get("table") is not None:
+                            try:
+                                st.dataframe(data["table"], use_container_width=True)
+                            except Exception:
+                                st.write("Validation table available in Structured Data tab.")
+
+                # Step 3: Diagnostics
+                if "diagnostics" in reasoning:
+                    with st.expander("🔬 Step 3 — Diagnostic Tests", expanded=False):
+                        data = reasoning["diagnostics"].get("data", {})
+                        if data:
+                            col_d1, col_d2 = st.columns(2)
+                            with col_d1:
+                                st.metric("Model Adequacy", f"{data.get('adequacy_score', 'N/A')}/100")
+                            with col_d2:
+                                st.metric("Rating", data.get("rating", "N/A"))
+                            issues = data.get("issues", [])
+                            if issues:
+                                st.warning("Issues detected:")
+                                for issue in issues:
+                                    st.write(f"- {issue}")
+                            else:
+                                st.success("No diagnostic issues found.")
+
+                # Step 4: Pattern Analysis (with full AgentThought)
+                if "pattern_analysis" in reasoning:
+                    with st.expander("🔍 Step 4 — Pattern Analysis (LLM Reasoning)", expanded=True):
+                        data = reasoning["pattern_analysis"].get("data", {})
+                        if data:
+                            smoothing = data.get("smoothing_applied", False)
+                            if smoothing:
+                                st.success(f"✅ Smoothing applied: **{data.get('smoothing_method', 'N/A')}** (weight: {data.get('smoothing_weight', 'N/A')})")
+                            else:
+                                st.info("ℹ️ No smoothing applied — raw development patterns deemed adequate.")
+
+                            # Display the full AgentThought if available
+                            tp = data.get("thought_process")
+                            if tp and hasattr(tp, 'analysis'):
+                                st.divider()
+
+                                # ── Analysis Phase ──
+                                st.markdown("**🔍 Analysis Phase**")
+                                st.write(tp.analysis.reasoning)
+                                col_a1, col_a2 = st.columns(2)
+                                with col_a1:
+                                    if tp.analysis.observations:
+                                        st.markdown("*Observations:*")
+                                        for obs in tp.analysis.observations:
+                                            st.write(f"- {obs}")
+                                    if tp.analysis.patterns:
+                                        st.markdown("*Patterns detected:*")
+                                        for p in tp.analysis.patterns:
+                                            st.write(f"- {p}")
+                                with col_a2:
+                                    if tp.analysis.anomalies:
+                                        st.markdown("*⚠️ Anomalies:*")
+                                        for a in tp.analysis.anomalies:
+                                            st.write(f"- {a}")
+                                    st.write(f"*Confidence:* **{tp.analysis.confidence.value}**")
+
+                                st.divider()
+
+                                # ── Decision Phase ──
+                                st.markdown("**🎯 Decision Phase**")
+                                st.write(f"*Choice:* **{tp.decision.choice}**")
+                                st.write(tp.decision.reasoning)
+                                st.write(f"*Confidence:* **{tp.decision.confidence.value}**")
+                                col_b1, col_b2, col_b3 = st.columns(3)
+                                with col_b1:
+                                    if tp.decision.evidence:
+                                        st.markdown("*Evidence:*")
+                                        for e in tp.decision.evidence:
+                                            st.write(f"- {e}")
+                                with col_b2:
+                                    if tp.decision.alternatives:
+                                        st.markdown("*Alternatives considered:*")
+                                        for a in tp.decision.alternatives:
+                                            st.write(f"- {a}")
+                                with col_b3:
+                                    if tp.decision.risks:
+                                        st.markdown("*Risks:*")
+                                        for r in tp.decision.risks:
+                                            st.write(f"- {r}")
+
+                                st.divider()
+
+                                # ── Self-Critique Phase ──
+                                st.markdown("**🔎 Self-Critique Phase**")
+                                st.write(tp.critique.recommendation)
+                                st.write(f"*Confidence:* **{tp.critique.confidence.value}**")
+                                col_c1, col_c2 = st.columns(2)
+                                with col_c1:
+                                    if tp.critique.weaknesses:
+                                        st.markdown("*Weaknesses identified:*")
+                                        for w in tp.critique.weaknesses:
+                                            st.write(f"- {w}")
+                                with col_c2:
+                                    if tp.critique.alternatives:
+                                        st.markdown("*Alternative approaches:*")
+                                        for a in tp.critique.alternatives:
+                                            st.write(f"- {a}")
+
+                # Step 5: Tail Fitting
+                if "tail_fitting" in reasoning:
+                    with st.expander("📐 Step 5 — Tail Factor Estimation", expanded=False):
+                        data = reasoning["tail_fitting"].get("data", {})
+                        if data:
+                            st.metric("Tail Factor", f"{data.get('tail_factor', 1.0):.4f}")
+
+                # Step 6: LLM Final Decision
+                if "llm_decision" in reasoning:
+                    with st.expander("🧠 Step 6 — LLM Final Decision", expanded=True):
+                        data = reasoning["llm_decision"].get("data", {})
+                        if data:
+                            st.success(f"**Selected Method:** {data.get('choice', 'N/A')}")
+                            st.write(f"**Confidence:** {data.get('confidence', 'N/A')}")
+                            st.markdown("---")
+                            st.markdown("**Full Reasoning:**")
+                            st.info(data.get("reasoning", "No reasoning available."))
+
+                # Step 7: Prudential Adjustments
+                if "prudence" in reasoning:
+                    with st.expander("⚖️ Step 7 — Prudential Adjustments", expanded=False):
+                        data = reasoning["prudence"].get("data", {})
+                        if data:
+                            adjustments = data.get("adjustments", [])
+                            if adjustments:
+                                for adj in adjustments:
+                                    st.write(f"- **{adj.get('type', '')}** (period {adj.get('period', '')}): {adj.get('old', 0):.4f} → {adj.get('new', 0):.4f}")
+                            else:
+                                st.success("No prudential adjustments needed.")
+
+                # ── VALIDATION AGENT — PEER REVIEW ──────────────
+                st.markdown("---")
+                st.markdown("### 🔍 Validation Agent — Peer Review")
+
+                vf = sel_data.get("validation_feedback") if sel_data else None
+                if vf:
+                    with st.expander("📋 Peer Review Feedback", expanded=True):
+                        agrees = vf.get("agrees", True)
+                        if agrees:
+                            st.success("✅ Validator **AGREES** with the selection")
+                        else:
+                            st.error("❌ Validator **DISAGREES** with the selection")
+
+                        st.write(f"**Confidence:** {vf.get('confidence', 'N/A')}")
+
+                        if vf.get("reasoning"):
+                            st.markdown("**Reasoning:**")
+                            st.info(vf["reasoning"])
+
+                        if vf.get("concerns"):
+                            st.warning("**Concerns:**")
+                            for concern in vf["concerns"]:
+                                st.write(f"- {concern}")
+
+                        if vf.get("suggestions"):
+                            st.markdown("**Suggestions:**")
+                            for suggestion in vf["suggestions"]:
+                                st.write(f"- {suggestion}")
+
+                        if vf.get("alternative"):
+                            st.error(f"**Alternative Recommendation:** {vf['alternative']}")
+                else:
+                    st.info("Peer review feedback not available for this analysis.")
+
+                # ── FINAL QUALITY SCORE ─────────────────────────
+                st.markdown("---")
+                st.markdown("### ✅ Final Quality Score")
+
+                validation = res.get("validation")
+                if validation:
+                    col_q1, col_q2 = st.columns([1, 2])
+                    with col_q1:
+                        st.metric("Confidence Score", f"{validation.overall_confidence_score}/100")
+                        status_icons = {"PASSED": "🟢", "WARNING": "🟡", "REJECTED": "🔴"}
+                        st.write(f"{status_icons.get(validation.status.value, '⚪')} **{validation.status.value}**")
+                    with col_q2:
+                        if validation.issues:
+                            for issue in validation.issues:
+                                if issue.severity == "WARNING":
+                                    st.warning(f"[{issue.component}] {issue.message}")
+                                elif issue.severity == "CRITICAL":
+                                    st.error(f"[{issue.component}] {issue.message}")
+                                else:
+                                    st.info(f"[{issue.component}] {issue.message}")
+                        else:
+                            st.success("No validation issues found.")
+                        st.caption(f"**Summary:** {validation.comparison_summary}")
