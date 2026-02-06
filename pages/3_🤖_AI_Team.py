@@ -202,6 +202,21 @@ if prompt := st.chat_input("Tell the research team what to analyze..."):
         # Stream Updates from Unified Router
         full_response = ""
         current_context = st.session_state.final_result
+
+        # If no analysis yet, provide basic triangle info so Q&A can answer simple questions
+        if current_context is None and selected_triangle is not None:
+            tri = selected_triangle
+            current_context = {
+                "triangle_preview": {
+                    "accident_years": [int(y) for y in tri.index.tolist()],
+                    "development_periods": [int(p) for p in tri.columns.tolist()],
+                    "shape": f"{tri.shape[0]} accident years × {tri.shape[1]} development periods",
+                    "first_year": int(tri.index.min()),
+                    "last_year": int(tri.index.max()),
+                    "label": triangle_label,
+                }
+            }
+
         reasoning_capture = {}  # Capture agent thought data for reasoning tab
 
         for update in orch.route_request(prompt, current_result=current_context, inputs=inputs):
