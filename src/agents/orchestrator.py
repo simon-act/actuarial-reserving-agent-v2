@@ -524,10 +524,18 @@ Classify this query."""
             "message": "Running full actuarial analysis...",
         }
 
+        # Get pre-computed factors from selection phase (avoid re-running selection)
+        precomputed = None
+        try:
+            precomputed = final_selection.adjusted_factors
+        except Exception:
+            pass  # Will fall back to full re-selection inside execute_full_analysis
+
         # Use the SelectionAgent to execute full analysis
         try:
             results = self.selector.execute_full_analysis(
-                triangle=triangle, config=config, premium=premium, verbose=True
+                triangle=triangle, config=config, premium=premium, verbose=True,
+                precomputed_factors=precomputed
             )
         except Exception as e:
             yield {

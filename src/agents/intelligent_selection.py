@@ -552,21 +552,32 @@ Confidence: {thought["confidence"]}
         config: ReservingConfigFile,
         premium: Optional[pd.Series] = None,
         verbose: bool = True,
+        precomputed_factors: Optional[pd.Series] = None,
     ) -> ReservingOutput:
         """
         Execute complete actuarial analysis and return ReservingOutput.
 
         This replaces the need for ReservingExecutionAgent.
         Uses EnhancedReservingWorkflow with selected factors.
+
+        Args:
+            precomputed_factors: If provided, skip selection and use these factors directly.
+                                 This avoids re-running the full selection pipeline.
         """
         from datetime import datetime
 
         if verbose:
             print(f"[Selection+Execution] 🚀 Starting full analysis...")
 
-        # First, do the selection
-        selection_result = self.analyze_and_select(triangle, verbose=verbose)
-        selected_factors = selection_result.adjusted_factors
+        if precomputed_factors is not None:
+            # Use pre-computed factors from earlier selection phase (avoid duplicate work)
+            selected_factors = precomputed_factors
+            if verbose:
+                print(f"[Selection+Execution] ✅ Using pre-computed factors (skipping re-selection)")
+        else:
+            # Fallback: run selection from scratch
+            selection_result = self.analyze_and_select(triangle, verbose=verbose)
+            selected_factors = selection_result.adjusted_factors
 
         # Use EnhancedReservingWorkflow for full execution
         workflow = EnhancedReservingWorkflow(
