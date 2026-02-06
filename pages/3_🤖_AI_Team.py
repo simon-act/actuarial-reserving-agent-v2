@@ -5,12 +5,15 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
+import tempfile
+import os
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
 from agents.orchestrator import Orchestrator
 from agents.schemas import ReservingInput, AgentRole
+from data_loader import TriangleLoader, TriangleInfo
 
 st.set_page_config(page_title="AI Actuarial Team", page_icon="🤖", layout="wide")
 
@@ -41,7 +44,100 @@ st.markdown("""
 st.title("🤖 AI Actuarial Team")
 st.markdown("---")
 
-# Sidebar
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
+
+SAMPLE_TRIANGLES = {
+    'swiss_re': 'Swiss Re Property Reinsurance (16×16)',
+    'mack': 'Mack GenIns - Mack 1993 (10×10)',
+    'taylor_ashe': 'Taylor/Ashe Benchmark (10×10)',
+    'abc': 'ABC Insurance Incurred (10×10)',
+    'uk_motor': 'UK Motor Claims (7×7)'
+}
+
+def get_project_root() -> Path:
+    current = Path(__file__).parent
+    for _ in range(5):
+        if (current / "data").exists():
+            return current
+        current = current.parent
+    return Path(__file__).parent.parent
+
+@st.cache_data
+def load_sample_triangle(name: str) -> pd.DataFrame:
+    loader = TriangleLoader()
+    if name == 'swiss_re':
+        data_dir = get_project_root() / "data" / "processed"
+        try:
+            triangle = pd.read_csv(data_dir / "reported_absolute_losses.csv", index_col=0)
+            triangle.columns = triangle.columns.astype(int)
+        except FileNotFoundError:
+            triangle = loader.load_sample('mack')
+    else:
+        triangle = loader.load_sample(name)
+    return triangle
+
+@st.cache_data
+def load_premium_data() -> pd.DataFrame:
+    data_dir = get_project_root() / "data" / "processed"
+    try:
+        return pd.read_csv(data_dir / "earned_premium.csv", index_col=0)
+    except:
+        return None
+
+# ============================================
+# SIDEBAR
+# ============================================
+
+# --- Data Selection ---
+st.sidebar.header("📁 Data Selection")
+
+data_source = st.sidebar.radio("Data source:", ["Sample Triangles", "Upload File"], key="ai_data_source")
+
+selected_triangle = None
+selected_premium = None
+triangle_label = ""
+
+if data_source == "Sample Triangles":
+    triangle_name = st.sidebar.selectbox(
+        "Select Triangle:",
+        options=list(SAMPLE_TRIANGLES.keys()),
+        format_func=lambda x: SAMPLE_TRIANGLES[x],
+        key="ai_triangle_select"
+    )
+    selected_triangle = load_sample_triangle(triangle_name)
+    if triangle_name == 'swiss_re':
+        selected_premium = load_premium_data()
+    triangle_label = SAMPLE_TRIANGLES[triangle_name]
+    st.sidebar.success(f"✅ {triangle_label}")
+else:
+    uploaded = st.sidebar.file_uploader("Upload Triangle (CSV/XLSX)", type=['csv', 'xlsx'], key="ai_upload")
+    if uploaded:
+        if uploaded.name.endswith('.csv'):
+            selected_triangle = pd.read_csv(uploaded, index_col=0)
+        else:
+            selected_triangle = pd.read_excel(uploaded, index_col=0)
+        try:
+            selected_triangle.columns = selected_triangle.columns.astype(int)
+        except:
+            pass
+        selected_triangle = selected_triangle.apply(pd.to_numeric, errors='coerce')
+        triangle_label = uploaded.name
+        st.sidebar.success(f"✅ {uploaded.name}")
+
+if selected_triangle is not None:
+    info = TriangleInfo(selected_triangle)
+    st.sidebar.markdown(f"""
+**Triangle Info:**
+- Years: {info.n_years} ({info.origin_start} - {info.origin_end})
+- Periods: {info.n_periods}
+- Type: {'Cumulative' if info.is_cumulative else 'Incremental'}
+""")
+
+st.sidebar.markdown("---")
+
+# --- Team Members ---
 st.sidebar.markdown("### 👥 Team Members")
 st.sidebar.markdown("""
 - **🧠 Methodology**: Strategy & Planning
@@ -62,6 +158,11 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
+# Guard: no triangle selected
+if selected_triangle is None:
+    st.info("👈 Select or upload a triangle from the sidebar to get started.")
+    st.stop()
+
 # User Input
 if prompt := st.chat_input("Tell the research team what to analyze..."):
     # Add user message
@@ -72,6 +173,24 @@ if prompt := st.chat_input("Tell the research team what to analyze..."):
     # Determine Mode -> Unified by Orchestrator
     with st.chat_message("assistant"):
         orch = Orchestrator()
+
+        # Build ReservingInput from selected triangle
+        # Save selected triangle to a temp CSV so the orchestrator can load it
+        tmp_dir = get_project_root() / "data" / "tmp"
+        tmp_dir.mkdir(exist_ok=True)
+        tmp_triangle_path = tmp_dir / "_ai_team_triangle.csv"
+        selected_triangle.to_csv(tmp_triangle_path)
+
+        premium_path = None
+        if selected_premium is not None:
+            tmp_premium_path = tmp_dir / "_ai_team_premium.csv"
+            selected_premium.to_csv(tmp_premium_path)
+            premium_path = str(tmp_premium_path)
+
+        inputs = ReservingInput(
+            triangle_path=str(tmp_triangle_path),
+            premium_path=premium_path
+        )
 
         # Containers (Lazy initialization)
         containers = {}
@@ -85,7 +204,7 @@ if prompt := st.chat_input("Tell the research team what to analyze..."):
         current_context = st.session_state.final_result
         reasoning_capture = {}  # Capture agent thought data for reasoning tab
 
-        for update in orch.route_request(prompt, current_result=current_context):
+        for update in orch.route_request(prompt, current_result=current_context, inputs=inputs):
             step = update["step"]
 
             # 1. Router Decision
