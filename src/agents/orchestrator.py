@@ -1,4 +1,4 @@
-from agents.schemas import ReservingInput, AgentRole, AgentLog
+from agents.schemas import ReservingInput, AgentRole, AgentLog, AnalysisType
 from agents.methodology import MethodologyAgent
 from agents.validation import ValidationAgent
 from agents.reporting import ReportingAgent
@@ -9,9 +9,36 @@ from agents.llm_utils import LLMClient
 
 import time
 import json
+import threading
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
+
+
+def _run_with_timeout(func, timeout_seconds, phase_name="phase"):
+    """
+    Run a function with a timeout using a daemon thread.
+    Returns (success: bool, error_message: str or None).
+    If timeout is reached, the daemon thread is abandoned.
+    """
+    result = {"ok": False, "error": None}
+
+    def target():
+        try:
+            func()
+            result["ok"] = True
+        except Exception as e:
+            result["error"] = str(e)
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+
+    if thread.is_alive():
+        return False, f"{phase_name} timed out after {timeout_seconds}s"
+    elif result["error"]:
+        return False, result["error"]
+    return True, None
 
 
 @dataclass
@@ -517,33 +544,151 @@ Classify this query."""
             }
             yield {"step": "selection", "status": "done", "data": selection_result}
 
-        # 3. Execution (now integrated into SelectionAgent)
+        # 3. Execution - Phase by phase with timeouts and progress streaming
         yield {
             "step": "execution",
             "status": "running",
-            "message": "Running full actuarial analysis...",
+            "message": "Initializing actuarial workflow...",
         }
 
-        # Get pre-computed factors from selection phase (avoid re-running selection)
+        # Get pre-computed factors from selection phase
         precomputed = None
         try:
             precomputed = final_selection.adjusted_factors
         except Exception:
-            pass  # Will fall back to full re-selection inside execute_full_analysis
+            pass
 
-        # Use the SelectionAgent to execute full analysis
-        try:
-            results = self.selector.execute_full_analysis(
-                triangle=triangle, config=config, premium=premium, verbose=True,
-                precomputed_factors=precomputed
+        # Set up workflow directly for phase-by-phase control
+        from enhanced_workflow import EnhancedReservingWorkflow
+
+        workflow = EnhancedReservingWorkflow(
+            triangle=triangle, earned_premium=premium, verbose=True
+        )
+
+        if precomputed is not None:
+            workflow.selected_factors = precomputed
+        else:
+            # Fallback: use simple average
+            from model_selection.factor_estimators import SimpleAverageEstimator
+            estimator = SimpleAverageEstimator()
+            workflow.selected_factors = estimator.estimate(triangle)
+
+        # Phase timeouts (seconds)
+        TIMEOUT_CL = 30
+        TIMEOUT_MACK = 60
+        TIMEOUT_BOOTSTRAP = 120
+        TIMEOUT_DIAGNOSTICS = 60
+        TIMEOUT_ALT_METHODS = 60
+        TIMEOUT_STRESS = 90
+
+        execution_phases = []
+
+        # Phase 1: Chain Ladder (always runs)
+        yield {"step": "execution_phase", "status": "running",
+               "message": "📊 Running Chain Ladder..."}
+        ok, err = _run_with_timeout(
+            lambda: workflow.run_chain_ladder(),
+            TIMEOUT_CL, "Chain Ladder"
+        )
+        if ok:
+            execution_phases.append("chain_ladder")
+            yield {"step": "execution_phase", "status": "done",
+                   "message": "✓ Chain Ladder complete"}
+        else:
+            yield {"step": "execution_phase", "status": "warning",
+                   "message": f"⚠️ Chain Ladder: {err}"}
+            # Chain Ladder is essential - abort if it fails
+            yield {"step": "execution", "status": "error",
+                   "message": f"Analysis failed: Chain Ladder error: {err}"}
+            return
+
+        # Phase 2: Mack Model (skip for QUICK)
+        if config.analysis_type != AnalysisType.QUICK:
+            yield {"step": "execution_phase", "status": "running",
+                   "message": "📈 Running Mack stochastic model..."}
+            ok, err = _run_with_timeout(
+                lambda: workflow.run_mack_model(),
+                TIMEOUT_MACK, "Mack Model"
             )
+            if ok:
+                execution_phases.append("mack")
+                yield {"step": "execution_phase", "status": "done",
+                       "message": "✓ Mack model complete"}
+            else:
+                yield {"step": "execution_phase", "status": "warning",
+                       "message": f"⚠️ Mack model skipped: {err}"}
+
+        # Phase 3: Bootstrap (if configured; timeout protects against infinite runs)
+        if config.run_bootstrap:
+            n_sims = config.n_bootstrap_simulations or 500
+            yield {"step": "execution_phase", "status": "running",
+                   "message": f"🎲 Running Bootstrap ({n_sims} simulations)..."}
+            ok, err = _run_with_timeout(
+                lambda: workflow.run_bootstrap(n_simulations=n_sims),
+                TIMEOUT_BOOTSTRAP, "Bootstrap"
+            )
+            if ok:
+                execution_phases.append("bootstrap")
+                yield {"step": "execution_phase", "status": "done",
+                       "message": "✓ Bootstrap complete"}
+            else:
+                yield {"step": "execution_phase", "status": "warning",
+                       "message": f"⚠️ Bootstrap skipped: {err}"}
+
+        # Phase 4: Alternative methods (FULL + premium only)
+        if config.analysis_type == AnalysisType.FULL and premium is not None:
+            yield {"step": "execution_phase", "status": "running",
+                   "message": "🏖️ Running Cape Cod method..."}
+            ok, err = _run_with_timeout(
+                lambda: workflow.run_alternative_methods(),
+                TIMEOUT_ALT_METHODS, "Alternative Methods"
+            )
+            if ok:
+                execution_phases.append("cape_cod")
+                yield {"step": "execution_phase", "status": "done",
+                       "message": "✓ Cape Cod complete"}
+            else:
+                yield {"step": "execution_phase", "status": "warning",
+                       "message": f"⚠️ Cape Cod skipped: {err}"}
+
+        # Phase 5: Diagnostics
+        if config.run_diagnostics:
+            yield {"step": "execution_phase", "status": "running",
+                   "message": "🔬 Running diagnostics..."}
+            ok, err = _run_with_timeout(
+                lambda: workflow.run_diagnostics(),
+                TIMEOUT_DIAGNOSTICS, "Diagnostics"
+            )
+            if ok:
+                execution_phases.append("diagnostics")
+                yield {"step": "execution_phase", "status": "done",
+                       "message": "✓ Diagnostics complete"}
+            else:
+                yield {"step": "execution_phase", "status": "warning",
+                       "message": f"⚠️ Diagnostics skipped: {err}"}
+
+        # Phase 6: Stress Testing (FULL only)
+        if config.run_stress_testing and config.analysis_type == AnalysisType.FULL:
+            yield {"step": "execution_phase", "status": "running",
+                   "message": "💪 Running stress tests..."}
+            ok, err = _run_with_timeout(
+                lambda: workflow.run_stress_testing(),
+                TIMEOUT_STRESS, "Stress Testing"
+            )
+            if ok:
+                execution_phases.append("stress")
+                yield {"step": "execution_phase", "status": "done",
+                       "message": "✓ Stress testing complete"}
+            else:
+                yield {"step": "execution_phase", "status": "warning",
+                       "message": f"⚠️ Stress testing skipped: {err}"}
+
+        # Package results
+        try:
+            results = self.selector._package_results(workflow, config, triangle, True)
         except Exception as e:
-            yield {
-                "step": "execution",
-                "status": "error",
-                "message": f"Analysis failed: {e}",
-            }
-            # Return early with error instead of crashing
+            yield {"step": "execution", "status": "error",
+                   "message": f"Result packaging failed: {e}"}
             return
 
         # Attach selection results

@@ -231,7 +231,7 @@ Clear, professional reasoning.
         yield {
             "phase": "validation",
             "status": "complete",
-            "content": f"✓ Best estimator by MSE: {validation['best'].get('MSE', 'N/A')}",
+            "content": f"✓ Best estimator by MAE: {validation['best'].get('MAE', 'N/A')}",
             "data": {"best": validation["best"], "table": validation["table"]},
         }
 
@@ -405,9 +405,13 @@ Clear, professional reasoning.
         best = {}
 
         if selector.comparison_table is not None:
-            for m in ["MSE", "MAE", "RMSE"]:
+            for m in ["MAE", "RMSE", "MAPE", "R²"]:
                 if m in selector.comparison_table:
-                    best[m] = selector.comparison_table[m].idxmin()
+                    # For R², higher is better; for errors, lower is better
+                    if m == "R²":
+                        best[m] = selector.comparison_table[m].idxmax()
+                    else:
+                        best[m] = selector.comparison_table[m].idxmin()
 
         return {"best": best, "table": selector.comparison_table}
 
@@ -423,7 +427,8 @@ Clear, professional reasoning.
     # --------------------------------------------------
 
     def _select_base_factors(self, validation, factors):
-        best = validation["best"].get("MSE")
+        # Try MAE first (most robust), then RMSE as fallback
+        best = validation["best"].get("MAE") or validation["best"].get("RMSE")
 
         if best and best in factors:
             return factors[best]
@@ -625,7 +630,12 @@ Confidence: {thought["confidence"]}
         triangle: pd.DataFrame,
         verbose: bool = True,
     ) -> ReservingOutput:
-        """Package workflow results into ReservingOutput structure."""
+        """Package workflow results into ReservingOutput structure.
+
+        Note: workflow.results stores actual objects (ChainLadder, MackChainLadder, etc.),
+        not plain dicts. We call their .summary() / .get_total_reserve_distribution()
+        methods to extract the numbers.
+        """
 
         # Triangle metadata
         triangle_meta = TriangleMetadata(
@@ -639,17 +649,28 @@ Confidence: {thought["confidence"]}
 
         results = workflow.results
 
-        # Chain Ladder
-        chain_ladder_result = MethodResult(
-            method_name="Chain Ladder",
-            total_reserve=results["chain_ladder"]["total_reserve"],
-            ultimate_loss=results["chain_ladder"]["total_ultimate"],
-            model_params={
-                "factors": workflow.selected_factors.to_dict()
-                if hasattr(workflow.selected_factors, "to_dict")
-                else {}
-            },
-        )
+        # --- Chain Ladder (object with .summary()) ---
+        cl_obj = results.get("chain_ladder")
+        if cl_obj is not None:
+            cl_summary = cl_obj.summary()
+            chain_ladder_result = MethodResult(
+                method_name="Chain Ladder",
+                total_reserve=cl_summary["total_reserve"],
+                ultimate_loss=cl_summary["total_ultimate"],
+                model_params={
+                    "factors": workflow.selected_factors.to_dict()
+                    if hasattr(workflow.selected_factors, "to_dict")
+                    else {}
+                },
+            )
+        else:
+            # Shouldn't happen, but safe fallback
+            chain_ladder_result = MethodResult(
+                method_name="Chain Ladder",
+                total_reserve=0,
+                ultimate_loss=0,
+                model_params={},
+            )
 
         # Initialize output
         output = ReservingOutput(
@@ -658,73 +679,163 @@ Confidence: {thought["confidence"]}
             chain_ladder=chain_ladder_result,
         )
 
-        # Mack Model
-        if "mack" in results:
-            mack_data = results["mack"]
-            total_reserve = mack_data["total_reserve"]
-            std_error = mack_data.get("total_std_error", 0)
-            cv = std_error / total_reserve if total_reserve > 0 else 0
+        # --- Mack Model (object with .get_total_reserve_distribution()) ---
+        mack_obj = results.get("mack")
+        if mack_obj is not None:
+            try:
+                mack_dist = mack_obj.get_total_reserve_distribution()
+                total_reserve = mack_dist.get("Total_Reserve", 0)
+                std_error = mack_dist.get("Total_SE", 0)
+                cv = mack_dist.get("Total_CV", 0)
 
-            percentiles = mack_data.get("percentiles", {})
-            if not percentiles and std_error > 0:
+                # Build percentiles from confidence intervals or normal approx
+                percentiles = {}
+                ci = mack_dist.get("Confidence_Intervals", {})
+                if ci:
+                    for level_key, (lower, upper) in ci.items():
+                        percentiles[level_key] = upper
+                elif std_error > 0:
+                    percentiles = {
+                        "p75": total_reserve + 0.674 * std_error,
+                        "p90": total_reserve + 1.282 * std_error,
+                        "p95": total_reserve + 1.645 * std_error,
+                        "p99": total_reserve + 2.326 * std_error,
+                    }
+
+                # Get ultimate from summary DataFrame
+                mack_summary_df = mack_obj.summary()
+                total_ultimate = mack_summary_df["Ultimate"].sum() if "Ultimate" in mack_summary_df.columns else 0
+
+                output.mack = StochasticResult(
+                    method_name="Mack",
+                    total_reserve=total_reserve,
+                    ultimate_loss=total_ultimate,
+                    standard_error=std_error,
+                    cv=cv,
+                    percentiles=percentiles,
+                )
+            except Exception as e:
+                if verbose:
+                    print(f"[PackageResults] Warning: Could not package Mack results: {e}")
+
+        # --- Bootstrap (object with .get_total_reserve_distribution()) ---
+        boot_obj = results.get("bootstrap")
+        if boot_obj is not None:
+            try:
+                boot_dist = boot_obj.get_total_reserve_distribution()
+                total_reserve = boot_dist.get("Mean", 0)
+                std_error = boot_dist.get("Std", 0)
+                cv = boot_dist.get("CV", 0)
+
+                # Estimate ultimate = latest observed + reserve
+                total_ultimate = triangle.apply(
+                    lambda row: row.dropna().iloc[-1] if len(row.dropna()) > 0 else 0,
+                    axis=1
+                ).sum() + total_reserve
+
                 percentiles = {
-                    "p75": total_reserve + 0.674 * std_error,
-                    "p90": total_reserve + 1.282 * std_error,
-                    "p95": total_reserve + 1.645 * std_error,
-                    "p99": total_reserve + 2.326 * std_error,
+                    "75%": boot_dist.get("P75", 0),
+                    "90%": boot_dist.get("P90", 0),
+                    "95%": boot_dist.get("P95", 0),
+                    "99%": boot_dist.get("P99", 0),
+                    "99.5%": boot_dist.get("P99", 0),  # approx
                 }
 
-            output.mack = StochasticResult(
-                method_name="Mack",
-                total_reserve=total_reserve,
-                ultimate_loss=mack_data["total_ultimate"],
-                standard_error=std_error,
-                cv=cv,
-                percentiles=percentiles,
+                output.bootstrap = StochasticResult(
+                    method_name="Bootstrap",
+                    total_reserve=total_reserve,
+                    ultimate_loss=total_ultimate,
+                    standard_error=std_error,
+                    cv=cv,
+                    percentiles=percentiles,
+                )
+            except Exception as e:
+                if verbose:
+                    print(f"[PackageResults] Warning: Could not package Bootstrap results: {e}")
+
+        # --- Cape Cod (object with .summary()) ---
+        cc_obj = results.get("cape_cod")
+        if cc_obj is not None:
+            try:
+                cc_summary = cc_obj.summary()
+                output.cape_cod = MethodResult(
+                    method_name="Cape Cod",
+                    total_reserve=cc_summary.get("total_cc_reserve", 0),
+                    ultimate_loss=cc_summary.get("total_cc_reserve", 0) + cc_summary.get("total_reported", 0),
+                    model_params={"elr": cc_summary.get("cape_cod_elr", 0)},
+                )
+            except Exception as e:
+                if verbose:
+                    print(f"[PackageResults] Warning: Could not package Cape Cod results: {e}")
+
+        # --- Diagnostics (dict of objects) ---
+        diag_dict = results.get("diagnostics")
+        if diag_dict is not None and isinstance(diag_dict, dict):
+            try:
+                # Get adequacy score from DiagnosticTests object
+                tests_obj = diag_dict.get("tests")
+                if tests_obj is not None:
+                    adequacy = tests_obj.get_model_adequacy_score()
+                    adequacy_score = adequacy.get("adequacy_score", 100)
+                    issues = adequacy.get("issues", [])
+                else:
+                    adequacy_score = 100
+                    issues = []
+
+                rating = "GOOD"
+                if adequacy_score < 60:
+                    rating = "POOR"
+                elif adequacy_score < 80:
+                    rating = "FAIR"
+
+                output.diagnostics = DiagnosticsResult(
+                    adequacy_score=adequacy_score,
+                    rating=rating,
+                    issues=issues,
+                )
+            except Exception as e:
+                if verbose:
+                    print(f"[PackageResults] Warning: Could not package Diagnostics results: {e}")
+
+        # --- Detailed Data (for Q&A agent) ---
+        try:
+            from agents.schemas import DetailedData
+
+            # Triangle as nested dict
+            triangle_dict = {}
+            for year in triangle.index:
+                triangle_dict[str(year)] = {
+                    str(col): (float(triangle.loc[year, col])
+                               if pd.notna(triangle.loc[year, col]) else None)
+                    for col in triangle.columns
+                }
+
+            # Development factors
+            dev_factors = {}
+            if hasattr(workflow.selected_factors, "items"):
+                dev_factors = {str(k): float(v) for k, v in workflow.selected_factors.items()}
+
+            # Reserves and ultimates by year from CL
+            reserves_by_year = {}
+            ultimates_by_year = {}
+            latest_diagonal = {}
+            if cl_obj is not None and hasattr(cl_obj, "ultimate_losses") and cl_obj.ultimate_losses is not None:
+                for year in cl_obj.ultimate_losses.index:
+                    row = cl_obj.ultimate_losses.loc[year]
+                    reserves_by_year[str(year)] = float(row.get("Reserve", 0))
+                    ultimates_by_year[str(year)] = float(row.get("Ultimate", 0))
+                    latest_diagonal[str(year)] = float(row.get("Latest_Value", 0))
+
+            output.detailed_data = DetailedData(
+                triangle=triangle_dict,
+                development_factors=dev_factors,
+                reserves_by_year=reserves_by_year,
+                ultimates_by_year=ultimates_by_year,
+                latest_diagonal=latest_diagonal,
             )
-
-        # Bootstrap
-        if "bootstrap" in results:
-            boot_data = results["bootstrap"]
-            total_reserve = boot_data["total_reserve"]
-            std_error = boot_data.get("std_error", 0)
-            cv = std_error / total_reserve if total_reserve > 0 else 0
-
-            output.bootstrap = StochasticResult(
-                method_name="Bootstrap",
-                total_reserve=total_reserve,
-                ultimate_loss=boot_data["total_ultimate"],
-                standard_error=std_error,
-                cv=cv,
-                percentiles=boot_data.get("percentiles", {}),
-            )
-
-        # Cape Cod
-        if "cape_cod" in results:
-            cc_data = results["cape_cod"]
-            output.cape_cod = MethodResult(
-                method_name="Cape Cod",
-                total_reserve=cc_data["total_reserve"],
-                ultimate_loss=cc_data["total_ultimate"],
-                model_params=cc_data.get("params", {}),
-            )
-
-        # Diagnostics
-        if "diagnostics" in results:
-            diag_data = results["diagnostics"]
-            adequacy_score = diag_data.get("adequacy_score", 100)
-
-            rating = "GOOD"
-            if adequacy_score < 60:
-                rating = "POOR"
-            elif adequacy_score < 80:
-                rating = "FAIR"
-
-            output.diagnostics = DiagnosticsResult(
-                adequacy_score=adequacy_score,
-                rating=rating,
-                issues=diag_data.get("issues", []),
-            )
+        except Exception as e:
+            if verbose:
+                print(f"[PackageResults] Warning: Could not build detailed data: {e}")
 
         return output
 

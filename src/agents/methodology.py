@@ -73,7 +73,7 @@ CONFIGURATION OPTIONS:
 - run_model_selection: Compare different factor estimators (yes/no)
 - run_cross_validation: Validate with hold-out periods (yes/no)
 - run_bootstrap: Simulation-based uncertainty (yes/no)
-- n_bootstrap_simulations: 1000 (standard) or 2000 (thorough)
+- n_bootstrap_simulations: 500 (standard) or 1000 (thorough)
 - run_diagnostics: Model quality tests (yes/no)
 - run_stress_testing: Scenario analysis (yes/no)
 
@@ -167,7 +167,7 @@ DECIDE the optimal configuration and explain WHY."""
             run_model_selection=True,
             run_cross_validation=False,
             run_bootstrap=True,
-            n_bootstrap_simulations=1000,
+            n_bootstrap_simulations=500,
             run_diagnostics=True,
             run_stress_testing=False,
             reasoning="Standard analysis selected",
@@ -189,7 +189,7 @@ DECIDE the optimal configuration and explain WHY."""
                 decision.run_model_selection = True
                 decision.run_cross_validation = True
                 decision.run_bootstrap = True
-                decision.n_bootstrap_simulations = 2000
+                decision.n_bootstrap_simulations = 1000
                 decision.run_diagnostics = True
                 decision.run_stress_testing = True
 
@@ -204,7 +204,7 @@ DECIDE the optimal configuration and explain WHY."""
                 if "cross-validation" in evidence_text or "validation" in evidence_text:
                     decision.run_cross_validation = True
                 if "2000" in evidence_text or "thorough" in evidence_text:
-                    decision.n_bootstrap_simulations = 2000
+                    decision.n_bootstrap_simulations = 1000
 
         return decision
 
@@ -344,7 +344,7 @@ DECIDE the optimal configuration and explain WHY."""
                 run_model_selection=True,
                 run_cross_validation=True,
                 run_bootstrap=True,
-                n_bootstrap_simulations=2000,
+                n_bootstrap_simulations=1000,
                 run_diagnostics=True,
                 run_stress_testing=True,
             )

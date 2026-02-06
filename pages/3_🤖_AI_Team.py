@@ -231,6 +231,9 @@ if prompt := st.chat_input("Tell the research team what to analyze..."):
                 cont = get_container(step, expanded=(update["status"]=="running"))
                 if update["status"] == "running":
                     cont.write(update["message"])
+                elif update["status"] == "error":
+                    cont.update(state="error", expanded=True)
+                    cont.write(f"❌ {update['message']}")
                 elif update["status"] == "done":
                     cont.update(state="complete", expanded=False)
                     # Specific summaries
@@ -245,6 +248,11 @@ if prompt := st.chat_input("Tell the research team what to analyze..."):
                         cont.write(f"**Reserves:** ${update['data'].chain_ladder.total_reserve:,.0f}")
                     elif step == "validation":
                         cont.write(f"**Score:** {update['data'].overall_confidence_score}/100")
+
+            # 2c. Execution sub-phases (Chain Ladder, Mack, Bootstrap, etc.)
+            elif step == "execution_phase":
+                cont = get_container("execution", expanded=True)
+                cont.write(update["message"])
 
             # 2b. Selection Agent Thought Process (streaming reasoning)
             elif step.startswith("selection_thought_"):
