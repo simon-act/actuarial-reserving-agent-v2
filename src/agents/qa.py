@@ -49,46 +49,68 @@ class QASpecialistAgent:
         llm_error = None
         if self.llm.is_available():
             try:
-                # Prepare Context
-                if results is None:
-                    raise ValueError(
-                        "No analysis results available. Please run an analysis first."
-                    )
-                results_json = results.model_dump_json(exclude={"timestamp"})
-                validation_json = validation.model_dump_json() if validation else "{}"
-
                 # Include conversation history in prompt
                 history_section = ""
                 if history_context:
                     history_section = f"\nRECENT CONVERSATION:\n{history_context}\n"
 
-                # System Prompt based on User Request
-                system_prompt = (
-                    "You are an Analytical Q&A Agent specialized in actuarial reserving results.\n"
-                    "You have access to COMPLETE DATA in JSON format:\n\n"
-                    "AVAILABLE DATA:\n"
-                    "- triangle_info: n_accident_years, n_development_periods, first/last year\n"
-                    "- detailed_data.triangle: FULL triangle {year: {period: value}}\n"
-                    "- detailed_data.development_factors: link ratios by period\n"
-                    "- detailed_data.reserves_by_year: reserve for each accident year\n"
-                    "- detailed_data.ultimates_by_year: ultimate loss for each year\n"
-                    "- detailed_data.latest_diagonal: most recent value per year\n"
-                    "- chain_ladder, mack, bootstrap, cape_cod: method results\n"
-                    "- diagnostics: model quality assessment\n"
-                    "- validation: issues and confidence score\n\n"
-                    "CAPABILITIES:\n"
-                    "- Answer ANY question about the data (structure, values, years, trends)\n"
-                    "- Provide specific numbers from any year or period\n"
-                    "- Analyze patterns and explain results\n"
-                    "- Compare methods and values\n"
-                    "- Understand follow-up questions using conversation history\n\n"
-                    "CONSTRAINT: Only use data present in the JSON. Do not invent numbers.\n\n"
-                    "Respond in the same language as the user's question.\n"
-                    f"{history_section}\n"
-                    "CONTEXT (JSON):\n"
-                    f"RESULTS: {results_json}\n"
-                    f"VALIDATION: {validation_json}\n"
-                )
+                # Check if we have full analysis results or just triangle preview
+                triangle_preview = context.get("triangle_preview")
+
+                if results is not None:
+                    # Full analysis context available
+                    results_json = results.model_dump_json(exclude={"timestamp"})
+                    validation_json = validation.model_dump_json() if validation else "{}"
+
+                    system_prompt = (
+                        "You are an Analytical Q&A Agent specialized in actuarial reserving results.\n"
+                        "You have access to COMPLETE DATA in JSON format:\n\n"
+                        "AVAILABLE DATA:\n"
+                        "- triangle_info: n_accident_years, n_development_periods, first/last year\n"
+                        "- detailed_data.triangle: FULL triangle {year: {period: value}}\n"
+                        "- detailed_data.development_factors: link ratios by period\n"
+                        "- detailed_data.reserves_by_year: reserve for each accident year\n"
+                        "- detailed_data.ultimates_by_year: ultimate loss for each year\n"
+                        "- detailed_data.latest_diagonal: most recent value per year\n"
+                        "- chain_ladder, mack, bootstrap, cape_cod: method results\n"
+                        "- diagnostics: model quality assessment\n"
+                        "- validation: issues and confidence score\n\n"
+                        "CAPABILITIES:\n"
+                        "- Answer ANY question about the data (structure, values, years, trends)\n"
+                        "- Provide specific numbers from any year or period\n"
+                        "- Analyze patterns and explain results\n"
+                        "- Compare methods and values\n"
+                        "- Understand follow-up questions using conversation history\n\n"
+                        "CONSTRAINT: Only use data present in the JSON. Do not invent numbers.\n\n"
+                        "Respond in the same language as the user's question.\n"
+                        f"{history_section}\n"
+                        "CONTEXT (JSON):\n"
+                        f"RESULTS: {results_json}\n"
+                        f"VALIDATION: {validation_json}\n"
+                    )
+
+                elif triangle_preview is not None:
+                    # No analysis yet, but we have basic triangle info
+                    import json
+                    preview_json = json.dumps(triangle_preview, indent=2)
+
+                    system_prompt = (
+                        "You are an Analytical Q&A Agent specialized in actuarial reserving.\n"
+                        "No analysis has been run yet, but you have basic information about the selected triangle.\n\n"
+                        "AVAILABLE DATA:\n"
+                        f"{preview_json}\n\n"
+                        "CAPABILITIES:\n"
+                        "- Answer questions about the triangle structure (years, periods, shape)\n"
+                        "- Describe what data is available\n"
+                        "- If the user asks about reserves or analysis results, explain that they need to run an analysis first\n\n"
+                        "Respond in the same language as the user's question.\n"
+                        f"{history_section}\n"
+                    )
+
+                else:
+                    raise ValueError(
+                        "No data available. Please select a triangle from the sidebar."
+                    )
 
                 response = self.llm.get_completion(system_prompt, query)
 
@@ -121,6 +143,33 @@ class QASpecialistAgent:
 
         query_lower = query.lower()
         response = ""
+
+        # Handle case where no analysis has been run yet
+        if results is None:
+            triangle_preview = context.get("triangle_preview")
+            if triangle_preview:
+                years = triangle_preview.get("accident_years", [])
+                label = triangle_preview.get("label", "Selected triangle")
+                response = (
+                    f"**{label}**\n\n"
+                    f"- Accident Years: {', '.join(str(y) for y in years)}\n"
+                    f"- Shape: {triangle_preview.get('shape', 'N/A')}\n"
+                    f"- First Year: {triangle_preview.get('first_year', 'N/A')}\n"
+                    f"- Last Year: {triangle_preview.get('last_year', 'N/A')}\n\n"
+                    "💡 *Run an analysis to get reserve estimates, diagnostics, and more.*"
+                )
+            else:
+                response = "No triangle selected and no analysis results available. Please select a triangle from the sidebar."
+
+            if fallback_preamble and not response.startswith("⚠️"):
+                response = fallback_preamble + response
+
+            log = AgentLog(
+                agent=self.role,
+                action="Q&A (Triangle Info)",
+                details=f"Query: {query[:20]}... | Answered: Triangle preview",
+            )
+            return response, log
 
         # 1. Validation / Warnings
         if (
